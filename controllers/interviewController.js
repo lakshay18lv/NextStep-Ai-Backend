@@ -1,10 +1,8 @@
-const crypto = require("crypto");
 const OpenAI = require("openai");
 const Interview = require("../models/Interview");
 const User = require("../models/User");
 
 let openaiClient = null;
-const questionCache = new Map();
 
 const getOpenAIClient = () => {
   if (!process.env.OPENAI_API_KEY) return null;
@@ -41,142 +39,6 @@ const parseQuestionList = (raw) => {
   return [];
 };
 
-const STOP_WORDS = new Set([
-  "the",
-  "and",
-  "for",
-  "with",
-  "your",
-  "from",
-  "that",
-  "this",
-  "have",
-  "about",
-  "into",
-  "will",
-  "what",
-  "when",
-  "where",
-  "how",
-  "why",
-  "are",
-  "was",
-  "were",
-  "been",
-  "you",
-  "our",
-  "their",
-  "they",
-  "them",
-  "can",
-  "could",
-  "should",
-  "would",
-  "more",
-  "than",
-  "then",
-  "not",
-  "use",
-  "used",
-  "using",
-  "resume",
-  "experience",
-  "skills",
-  "skill",
-  "project",
-  "projects",
-  "team",
-  "worked",
-  "work",
-]);
-
-const extractKeywords = (text = "") => {
-  const tokens = String(text)
-    .toLowerCase()
-    .replace(/[^a-z0-9+\s-]/g, " ")
-    .split(/\s+/)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 2 && !STOP_WORDS.has(item));
-
-  const frequencies = new Map();
-  tokens.forEach((token) => {
-    frequencies.set(token, (frequencies.get(token) || 0) + 1);
-  });
-
-  return [...frequencies.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([word]) => word);
-};
-
-const titleCase = (value = "") =>
-  String(value)
-    .replace(/[-_]/g, " ")
-    .replace(/\b\w/g, (match) => match.toUpperCase())
-    .trim() || "the role";
-
-const buildFallbackQuestions = ({ resumeText, difficulty, domain }) => {
-  const keywords = extractKeywords(resumeText);
-  const focus = keywords.length ? keywords[0] : titleCase(domain);
-  const secondary = keywords[1] || focus;
-  const tertiary = keywords[2] || secondary;
-  const level = String(difficulty || "medium").toLowerCase();
-
-  const templates = {
-    easy: [
-      `Can you explain your experience with ${focus} in simple terms?`,
-      `What part of your work on ${secondary} are you most comfortable with?`,
-      `Describe a project where you used ${focus} and what you learned from it.`,
-      `How do you usually start when working on ${focus}?`,
-      `What tools or technologies helped you most when working with ${secondary}?`,
-      `Tell me about a time you collaborated on a ${domain || "project"} task.`,
-      `What motivated you to learn ${focus}?`,
-      `Which part of ${secondary} felt hardest at first, and how did you improve?`,
-      `How would you explain ${focus} to someone new to the field?`,
-      `What is one simple win you achieved while working on ${domain || "this domain"}?`,
-    ],
-    medium: [
-      `Describe a project where you used ${focus} and explain the trade-offs you made.`,
-      `How did you handle a challenge while working on ${secondary}?`,
-      `What is one technical decision you made in a ${domain || "recent"} project and why?`,
-      `How do you balance speed and quality when delivering work related to ${focus}?`,
-      `What would you improve if you had more time on your ${tertiary} project?`,
-      `How do you measure whether your solution is successful in ${domain || "this domain"}?`,
-      `How did you collaborate with others while working on ${focus}?`,
-      `What constraints affected your approach to ${secondary}?`,
-      `How would you explain the impact of your ${domain || "project"} work to a non-technical person?`,
-      `What part of ${tertiary} required the most problem-solving from you?`,
-    ],
-    hard: [
-      `Tell me about a difficult ${domain || "technical"} problem you solved using ${focus}, and why your approach was the best option.`,
-      `If a senior engineer challenged your design for ${secondary}, how would you defend it?`,
-      `How would you redesign your ${tertiary} solution if traffic or scale increased 10x?`,
-      `What trade-offs did you consider between performance, maintainability, and delivery time in a ${domain || "project"}?`,
-      `How would you mentor a junior teammate who struggled with ${focus}?`,
-      `What metric would prove that your work on ${secondary} had business impact?`,
-      `How would you troubleshoot a critical failure in a system related to ${focus} under time pressure?`,
-      `What would you do if your original solution for ${secondary} no longer met business needs?`,
-      `How would you justify investing more engineering time into ${domain || "this area"}?`,
-      `What is the most complex trade-off you made in a ${domain || "project"} and why?`,
-    ],
-  };
-
-  return templates[level] || templates.medium;
-};
-
-const buildQuestionCacheKey = ({ userId, resumeText, difficulty, domain }) =>
-  crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify({
-        userId: String(userId || ""),
-        resumeText: String(resumeText || "").trim().toLowerCase(),
-        difficulty: String(difficulty || "medium").trim().toLowerCase(),
-        domain: String(domain || "General").trim().toLowerCase(),
-      }),
-    )
-    .digest("hex");
-
 const generateWithOpenAI = async ({ resumeText, difficulty, domain }) => {
   const client = getOpenAIClient();
   if (!client) {
@@ -189,16 +51,16 @@ const generateWithOpenAI = async ({ resumeText, difficulty, domain }) => {
 
   try {
     const response = await client.chat.completions.create({
-        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are an expert interview coach. Return only a JSON array of 10 interview questions.",
-          },
-          {
-            role: "user",
-            content: `
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are an expert interview coach. Return only a JSON array of 10 interview questions.",
+        },
+        {
+          role: "user",
+          content: `
 Target domain: ${domain}
 Difficulty: ${difficulty}
 Resume text: ${resumeText || "No resume text provided."}
@@ -209,10 +71,13 @@ Rules:
 - hard questions should include trade-offs, impact, and advanced reasoning
 - questions must clearly differ across difficulty levels
 - return JSON array only
-            `.trim(),
-          },
-        ],
-        temperature: 0,
+          `.trim(),
+        },
+      ],
+      temperature: 0.7,
+      top_p: 1,
+      presence_penalty: 0.5,
+      frequency_penalty: 0.3,
     });
 
     const content = response?.choices?.[0]?.message?.content;
@@ -265,41 +130,16 @@ const generateQuestions = async (req, res, next) => {
       domain: req.body.domain || "General",
     };
 
-    const cacheKey = buildQuestionCacheKey({
-      userId: req.user?._id,
-      ...payload,
-    });
-
-    if (questionCache.has(cacheKey)) {
-      const cached = questionCache.get(cacheKey);
-      return res.json({
-        questions: cached.questions,
-        source: cached.source,
-        cached: true,
-      });
-    }
-
     const aiResult = await generateWithOpenAI(payload);
     if (aiResult.questions?.length) {
-      questionCache.set(cacheKey, {
-        questions: aiResult.questions,
-        source: aiResult.source,
-      });
       return res.json({
         questions: aiResult.questions,
         source: aiResult.source,
       });
     }
 
-    const fallbackQuestions = buildFallbackQuestions(payload);
-    questionCache.set(cacheKey, {
-      questions: fallbackQuestions,
-      source: "fallback",
-    });
-    return res.json({
-      questions: fallbackQuestions,
-      source: "fallback",
-      message: aiResult.reason || "OpenAI unavailable, used fallback generator",
+    return res.status(503).json({
+      message: aiResult.reason || "OpenAI question generation failed",
     });
   } catch (err) {
     return next(err);
